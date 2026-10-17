@@ -1,0 +1,77 @@
+# rustytools.toml - rusty_tools configuration
+# Place at: <Steam>/rustytools.toml
+# Loaded at startup; hot-reloaded on changes.
+
+[log]
+# Per-module log level. Valid: trace, debug, info, warn, error
+level = "debug"
+
+[manifest]
+# Upstream API for depot manifest request codes.
+#   "opensteamtool" -> https://manifest.opensteamtool.com/{gid}
+#   "wudrm"         -> http://gmrc.wudrm.com/manifest/{gid}
+#   "steamrun"      -> https://manifest.steam.run/api/manifest/{gid}
+#
+# If <Steam>/config/stplug-in/manifest.lua defines either
+#   fetch_manifest_code(gid)
+#   fetch_manifest_code_ex(app_id, depot_id, gid)
+# those Lua functions take priority over url below. Both can use the
+# real http_get / http_post helpers, which return (body, status).
+url = "opensteamtool"
+
+timeout_resolve_ms = 5000
+timeout_connect_ms = 5000
+timeout_send_ms    = 10000
+timeout_recv_ms    = 10000
+
+[donate]
+# Contribute manifest request codes for depots THIS account owns.
+enabled = true
+# url = "https://manifest.luastools.xyz"
+# interval_secs = 30
+# wanted_refresh_secs = 300
+# max_mints_per_cycle = 25
+# min_mint_interval_ms = 2000
+# max_mints_per_session = 0
+
+[stats]
+# Query https://stats.opensteamtool.com/{appid} when no setStat() override
+# exists. Priority: setStat > stats API > hardcoded preset SteamID.
+enable_api = true
+
+[update]
+# Reserved. Self-updater is not compiled in for the Rust port.
+enabled = false
+
+[lua]
+# Additional Lua config directories.
+# paths = ["D:/my-steam-config/lua"]
+
+# Optional library injection into game processes. Each [[inject]] entry
+# injects when every condition it sets matches the launch.
+# [[inject]]
+# path = "RustyToolsHook.dll"
+# when_cmdline = "-my_special_hook"
+# when_appids = [1361510]
+# all_games = false
+
+[cloud]
+# Optional Steam Cloud save redirection, powered by CloudRedirect.
+enabled = false
+# library = "cloud_redirect.dll"
+
+[tokeer]
+# Install the bst:// URI scheme under HKCU\Software\Classes\bst.
+#
+# Recommended: leave this at false and run ONCE from a terminal:
+#   ost-cli register-uri "<path-to-RustyTools.dll>"
+#
+# Enabling this makes the DLL ensure the scheme is registered on every
+# startup. The registry write takes the per-user hive lock, which is
+# shared with Steam's own startup writes and can stall Steam long
+# enough for its watchdog to terminate the process.
+register_scheme = false
+
+[remote]
+# Optional metadata mirror(s). Leave unset for the built-in chain.
+# url_template = "https://your.server/{channel}/{component}/{sha256}.toml"

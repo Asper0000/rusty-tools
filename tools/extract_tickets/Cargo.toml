@@ -1,0 +1,19 @@
+[package]
+name = "extract_tickets"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "Extract the AppTicket and ETicket hex strings for a given Steam AppID"
+license = "MIT"
+
+[[bin]]
+name = "extract_tickets"
+path = "src/main.rs"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_System_Environment",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+] }
