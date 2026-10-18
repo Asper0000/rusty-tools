@@ -46,9 +46,11 @@
 
 **RustyTools** is a lightweight add-on for the Steam client that makes Steam treat your account as if it owns the games and DLCs you tell it to. Add an appid to a small Lua script, restart Steam, and the game shows up in your library, ready to install and play.
 
+> **Note:** RustyTools is primarily developed for **[Locomotive](https://github.com/Asper0000/locomotive)**, but works perfectly as a standalone add-on.
+
 Under the hood, RustyTools loads into the Steam client at startup and quietly answers Steam's own "do I own this?" questions the way you'd want. Steam never knows the difference, and the games install and launch normally.
 
-It's a fork of the C++ project **[BetterSteamTools](https://github.com/madoiscool/BetterSteamTools)**, fully rewritten in Rust for better memory safety, cleaner concurrency, and a modern toolchain. Everything the original could do, RustyTools does, plus a few extras.
+It's a fork of the C++ project **[BetterSteamTools](https://github.com/madoiscool/BetterSteamTools)**, fully rewritten in Rust for better memory safety, cleaner concurrency, and a modern toolchain. Everything the original could do, RustyTools does, plus a few extras. Not to mention it also fixes many hidden bugs BetterSteamTools has.
 
 - **Free and open-source.** No accounts, no tokens, no premium tiers.
 - **No install.** Drop three DLLs next to `steam.exe` and restart Steam.
