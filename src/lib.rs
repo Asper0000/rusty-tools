@@ -1,7 +1,11 @@
 //! rusty_tools - Rust port of OpenSteamTool / BetterSteamTools.
 
+// NOTE: `dead_code` is still allowed pending cleanup of porting-fidelity
+// stubs (the C++ tree deliberately keeps some unwired functions).
+// `unused_imports` is NOT: an unused import almost always means a
+// refactor forgot to rewire a call site, and none of them are needed
+// for FFI the way `non_snake_case` / `non_camel_case_types` are.
 #![allow(dead_code)]
-#![allow(unused_imports)]
 #![allow(non_snake_case)]
 #![allow(non_camel_case_types)]
 

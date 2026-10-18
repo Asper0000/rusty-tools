@@ -69,6 +69,7 @@ struct Snapshot {
     log_level: LogLevel,
     log_dir: String,
     lua_paths: Vec<String>,
+    lua_dir: Option<String>,
     remote_url_templates: Vec<String>,
     stats_enable_api: bool,
     update_enabled: bool,
@@ -86,6 +87,7 @@ impl Default for Snapshot {
             log_level: LogLevel::Debug,
             log_dir: String::new(),
             lua_paths: Vec::new(),
+            lua_dir: None,
             remote_url_templates: Vec::new(),
             stats_enable_api: true,
             update_enabled: true,
@@ -106,6 +108,7 @@ static STATE: Mutex<State> = Mutex::new(State {
         log_level: LogLevel::Debug,
         log_dir: String::new(),
         lua_paths: Vec::new(),
+        lua_dir: None,
         remote_url_templates: Vec::new(),
         stats_enable_api: true,
         update_enabled: true,
@@ -128,7 +131,7 @@ struct TomlManifest {
     timeout_recv_ms: Option<i64>,
 }
 #[derive(Deserialize, Default)] struct TomlLog { level: Option<String> }
-#[derive(Deserialize, Default)] struct TomlLua { paths: Option<Vec<String>> }
+#[derive(Deserialize, Default)] struct TomlLua { paths: Option<Vec<String>>, dir: Option<String> }
 #[derive(Deserialize, Default)] struct TomlRemote { url_template: Option<StringOrVec> }
 #[derive(Deserialize)]
 #[serde(untagged)]
@@ -196,6 +199,7 @@ fn snapshot_from_toml(toml_cfg: &TomlConfig, config_path: &Path) -> Snapshot {
         if let Some(lvl) = parse_log_level(v) { s.log_level = lvl; }
     }
     if let Some(v) = &toml_cfg.lua.paths { s.lua_paths = v.clone(); }
+    if let Some(v) = &toml_cfg.lua.dir { s.lua_dir = Some(v.clone()); }
     if let Some(rt) = &toml_cfg.remote.url_template {
         match rt {
             StringOrVec::Single(x) => s.remote_url_templates.push(x.clone()),
@@ -314,6 +318,20 @@ macro_rules! getter {
     };
 }
 getter!(get_lua_paths, Vec<String>, lua_paths);
+pub fn get_lua_dir(steam_root: &str) -> String {
+    let g = STATE.lock().expect("poisoned");
+    if let Some(dir) = &g.snapshot.lua_dir {
+        if !dir.is_empty() {
+            let p = std::path::Path::new(dir);
+            if p.is_absolute() {
+                return dir.clone();
+            } else {
+                return format!("{}\\{}", steam_root, dir);
+            }
+        }
+    }
+    format!("{}\\config\\stplug-in", steam_root)
+}
 getter!(get_remote_url_templates, Vec<String>, remote_url_templates);
 getter!(get_log_dir, String, log_dir);
 getter!(get_inject_dlls, Vec<InjectDll>, inject_dlls);

@@ -68,6 +68,27 @@ pub fn paths() -> Option<&'static RuntimePaths> { PATHS.get() }
 const DLL_PROCESS_ATTACH: u32 = 1;
 const DLL_PROCESS_DETACH: u32 = 0;
 
+// Ã¢â€â‚¬Ã¢â€â‚¬ Loader-lock-safe debug output Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+//
+// DllMain runs under the Windows loader lock. Calling LOG_INFO! from
+// here takes the per-file log mutex and performs disk I/O, which can
+// deadlock with a thread that is blocked on the same mutex while
+// Detours later tries to suspend it (see #17). OutputDebugStringA is
+// safe in a loader-locked context: no file I/O, no lock.
+#[cfg(windows)]
+fn dllmain_debug(msg: &str) {
+    if let Ok(cstr) = std::ffi::CString::new(msg) {
+        unsafe {
+            windows_sys::Win32::System::Diagnostics::Debug::OutputDebugStringA(
+                cstr.as_ptr() as *const u8,
+            );
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn dllmain_debug(_msg: &str) {}
+
 // ── Init thread ─────────────────────────────────────────────────────
 
 /// Build the six runtime paths from the current working directory and
@@ -165,7 +186,8 @@ fn init_thread(self_module: ModuleHandle) -> u32 {
     LOG_INFO!("[wf] ipc_loader::load: done");
 
     LOG_INFO!("[wf] lua parse: enter");
-    let watch_dirs = lua_config::merge_watch_dirs(&config::get_lua_paths(), &paths.lua_dir);
+    let resolved_lua_dir = config::get_lua_dir(&paths.install);
+    let watch_dirs = lua_config::merge_watch_dirs(&config::get_lua_paths(), &resolved_lua_dir);
     for dir in &watch_dirs {
         lua_config::parse_directory(dir);
     }
@@ -176,7 +198,7 @@ fn init_thread(self_module: ModuleHandle) -> u32 {
     LOG_INFO!("[wf] lua_file_watcher::start: done");
 
     LOG_INFO!("[wf] config_file_watcher::start: enter");
-    config_file_watcher::start(&paths.config, &paths.lua_dir);
+    config_file_watcher::start(&paths.config, &paths.install);
     LOG_INFO!("[wf] config_file_watcher::start: done");
 
     LOG_INFO!("[wf] install_steamui_hooks: enter");
@@ -274,9 +296,17 @@ pub unsafe extern "system" fn DllMain(
 ) -> i32 {
     match reason {
         DLL_PROCESS_ATTACH => {
-            LOG_INFO!("[wf] DllMain DLL_PROCESS_ATTACH is_steam_host={}", is_steam_host());
+            // Do NOT use LOG_INFO! here. DllMain runs under the loader
+            // lock; taking the file mutex can deadlock with Detours'
+            // suspend-all during unhook. OutputDebugStringA is safe.
+            let is_host = is_steam_host();
+            dllmain_debug(if is_host {
+                "[wf] DllMain DLL_PROCESS_ATTACH is_steam_host=true"
+            } else {
+                "[wf] DllMain DLL_PROCESS_ATTACH is_steam_host=false"
+            });
             windows_sys::Win32::System::LibraryLoader::DisableThreadLibraryCalls(hmodule);
-            if !is_steam_host() {
+            if !is_host {
                 // e.g. rundll32 servicing a bst:// handler. No
                 // injection machinery runs; the TokeerUri export does
                 // its work standalone.
@@ -293,7 +323,8 @@ pub unsafe extern "system" fn DllMain(
             1
         }
         DLL_PROCESS_DETACH => {
-            LOG_INFO!("[wf] DllMain DLL_PROCESS_DETACH");
+            // Loader-lock-safe: see comment in the ATTACH branch.
+            dllmain_debug("[wf] DllMain DLL_PROCESS_DETACH");
             if is_steam_host() {
                 let _ = std::panic::catch_unwind(|| {
                     config_file_watcher::stop();

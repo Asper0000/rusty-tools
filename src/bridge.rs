@@ -23,7 +23,9 @@ pub fn stats_fetch_stat_steam_id(app_id: u32) -> Option<u64> {
 
 // â”€â”€ AppTicket bridge â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-/// Delegates to `utils::tickets::app_ticket::write_app_ownership_ticket`.
+/// Stub: the Denuvo ticket pipeline was removed from this build (see
+/// `src/unused_denuvo/README.md`). Returns `true` so Lua `setappticket`
+/// calls do not raise; nothing is written to the credential store.
 pub fn appticket_write_ownership_ticket(app_id: u32, _data: &[u8]) -> bool {
     LOG_WARN!(
         "appticket_write_ownership_ticket(app={}): Denuvo backend removed from this build; ticket ignored",
@@ -31,7 +33,7 @@ pub fn appticket_write_ownership_ticket(app_id: u32, _data: &[u8]) -> bool {
     );
     true
 }
-/// Delegates to `utils::tickets::app_ticket::write_encrypted_ticket`.
+/// Stub: see `appticket_write_ownership_ticket` above.
 pub fn appticket_write_encrypted_ticket(app_id: u32, _data: &[u8]) -> bool {
     LOG_WARN!(
         "appticket_write_encrypted_ticket(app={}): Denuvo backend removed from this build; ticket ignored",

@@ -8,6 +8,8 @@ REM ============================================================
 
 set "ROOT=%~1"
 if "%ROOT%"=="" set "ROOT=%CD%"
+for %%I in ("%ROOT%") do set "ROOT=%%~fI"
+
 set "OUT=%~2"
 if "%OUT%"=="" set "OUT=%CD%\codebase_dump.txt"
 
@@ -18,7 +20,7 @@ echo.
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$ErrorActionPreference='SilentlyContinue';" ^
   "$root='%ROOT%'; $out='%OUT%';" ^
-  "$skipDirs='\\\.git\\|\\node_modules\\|\\bin\\|\\obj\\|\\\.vs\\|\\dist\\|\\build\\|\\\.next\\|\\__pycache__\\|\\\.venv\\|\\venv\\|\\\.idea\\|\\\.vscode\\|\\coverage\\|\\target\\|\\out\\|\\Detours\\';" ^
+  "$skipDirs='\\\.git\\|\\\.svn\\|\\\.hg\\|\\node_modules\\|\\bin\\|\\obj\\|\\\.vs\\|\\dist\\|\\build\\|\\\.next\\|\\__pycache__\\|\\\.venv\\|\\venv\\|\\\.idea\\|\\\.vscode\\|\\coverage\\|\\target\\|\\out\\|\\Detours\\|\\third[_-]?part(s|y)?\\';" ^
   "$skipExt='\.(exe|dll|pdb|so|dylib|class|jar|pyc|o|a|lib|bin|zip|tar|gz|7z|rar|png|jpg|jpeg|gif|bmp|ico|pdf|mp3|mp4|avi|mov|wav|flac|woff|woff2|ttf|eot|otf|db|sqlite|lock|map|min\.js)$';" ^
   "if(Test-Path $out){Remove-Item $out -Force};" ^
   "$files = Get-ChildItem -Path $root -Recurse -File -Force | Where-Object { $p=$_.FullName; -not ($p -match $skipDirs) -and -not ($p -match $skipExt) } | Sort-Object FullName;" ^
