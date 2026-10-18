@@ -5,6 +5,16 @@
 <h1 align="center">RustyTools</h1>
 
 <p align="center">
+  <a href="https://www.deepseek.com/" target="_blank">
+    <img src="https://raw.githubusercontent.com/Asper0000/rusty-tools/bb343210568a1cc72b9df65a08b12dc764216d9b/src/public/built-with-deepseek.svg" height="50" alt="Built with Deepseek">
+  </a>
+  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="#installation">
+    <img src="https://raw.githubusercontent.com/Asper0000/rusty-tools/bb343210568a1cc72b9df65a08b12dc764216d9b/src/public/view-the-installation-guide.svg" height="50" alt="View the installation guide">
+  </a>
+</p>
+
+<p align="center">
   <strong>Unlock nearly every game on Steam, and all of its DLCs.</strong><br>
   A free, open-source Steam unlocker. Fork of <a href="https://github.com/madoiscool/BetterSteamTools">BetterSteamTools</a>, rewritten from the ground up in Rust.
 </p>
@@ -15,7 +25,7 @@
 </p>
 
 <p align="center">
-  <strong>English</strong> · <a href="README.zh-CN.md">简体中文</a>
+  <strong>🇺🇸 English</strong> · <a href="README.zh-CN.md">🇨🇳 简体中文</a>
 </p>
 
 ---
