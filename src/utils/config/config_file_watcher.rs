@@ -28,17 +28,17 @@ static RUNNING: AtomicBool = AtomicBool::new(false);
 static SHUTDOWN: AtomicBool = AtomicBool::new(false);
 static HANDLE: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
 
-pub fn start(config_path: &str, lua_dir: &str) {
+pub fn start(config_path: &str, steam_root: &str) {
     if RUNNING.swap(true, Ordering::SeqCst) {
         return;
     }
     SHUTDOWN.store(false, Ordering::SeqCst);
 
     let config_path = config_path.to_string();
-    let lua_dir = lua_dir.to_string();
+    let steam_root = steam_root.to_string();
     let h = std::thread::Builder::new()
         .name("ost-cfg-watch".into())
-        .spawn(move || worker(config_path, lua_dir))
+        .spawn(move || worker(config_path, steam_root))
         .ok();
     *HANDLE.lock().expect("config watcher handle poisoned") = h;
 }
@@ -52,7 +52,7 @@ pub fn stop() {
     RUNNING.store(false, Ordering::SeqCst);
 }
 
-fn worker(config_path: String, lua_dir: String) {
+fn worker(config_path: String, steam_root: String) {
     let config_parent = PathBuf::from(&config_path)
         .parent()
         .map(|p| p.to_string_lossy().into_owned())
@@ -62,6 +62,7 @@ fn worker(config_path: String, lua_dir: String) {
         .map(|f| f.to_string_lossy().into_owned())
         .unwrap_or_default();
 
+    let mut lua_dir = crate::utils::config::config::get_lua_dir(&steam_root);
     let mut watches: Vec<Watch> = Vec::new();
     let mut tags: Vec<Tag> = Vec::new();
 
@@ -126,15 +127,23 @@ fn worker(config_path: String, lua_dir: String) {
                     LOG_INFO!("ConfigFileWatcher: {} changed, reloading", config_path);
                     let result = crate::utils::config::config::load(&config_path);
                     crate::utils::logging::init_modules_public();
-                    // A changed `[lua].paths` list means the Lua watch
-                    // set has to be rebuilt from the new config.
-                    if result.lua_paths_changed {
+                    
+                    let new_lua_dir = crate::utils::config::config::get_lua_dir(&steam_root);
+                    let lua_dir_changed = new_lua_dir != lua_dir;
+                    lua_dir = new_lua_dir;
+
+                    if result.lua_paths_changed || lua_dir_changed {
                         let new_dirs = crate::utils::config::lua_config::merge_watch_dirs(
                             &crate::utils::config::config::get_lua_paths(),
                             &lua_dir,
                         );
                         crate::utils::config::lua_config::reload_directories(&new_dirs, false);
                         crate::bridge::hooks_notify_license_changed();
+
+                        if lua_dir_changed {
+                            crate::utils::config::lua_file_watcher::stop();
+                            crate::utils::config::lua_file_watcher::start(new_dirs);
+                        }
                     }
                 }
                 if reload_lua {

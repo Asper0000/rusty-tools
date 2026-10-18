@@ -1,3 +1,5 @@
-# Folders to ignore
 Detours/
 target/
+patch.bat
+logo/
+codebase_dump.txt
