@@ -75,7 +75,6 @@ struct Snapshot {
     update_enabled: bool,
     donate: DonateSettings,
     inject_dlls: Vec<InjectDll>,
-    tokeer_register_scheme: bool,
     cloud: CloudSettings,
 }
 
@@ -94,7 +93,6 @@ impl Default for Snapshot {
             donate: DonateSettings::default(),
             inject_dlls: Vec::new(),
             cloud: CloudSettings::default(),
-            tokeer_register_scheme: false,
         }
     }
 }
@@ -117,7 +115,6 @@ static STATE: Mutex<State> = Mutex::new(State {
                                   max_mints_per_session: 0, wanted_refresh_secs: 300 },
         inject_dlls: Vec::new(),
         cloud: CloudSettings { enabled: false, library: String::new() },
-        tokeer_register_scheme: false,
     },
     loaded_once: false,
 });
@@ -151,7 +148,6 @@ struct TomlInject {
     all_games: Option<bool>, when_appids: Option<Vec<i64>>,
 }
 #[derive(Deserialize, Default)] struct TomlCloud { enabled: Option<bool>, library: Option<String> }
-#[derive(Deserialize, Default)] struct TomlTokeer { register_scheme: Option<bool> }
 
 #[derive(Deserialize, Default)]
 struct TomlConfig {
@@ -164,7 +160,6 @@ struct TomlConfig {
     #[serde(default)] donate: TomlDonate,
     #[serde(default)] inject: Vec<TomlInject>,
     #[serde(default)] cloud: TomlCloud,
-    #[serde(default)] tokeer: TomlTokeer,
 }
 
 fn parse_log_level(s: &str) -> Option<LogLevel> {
@@ -235,7 +230,6 @@ fn snapshot_from_toml(toml_cfg: &TomlConfig, config_path: &Path) -> Snapshot {
     }
     if let Some(v) = toml_cfg.cloud.enabled { s.cloud.enabled = v; }
     if let Some(v) = &toml_cfg.cloud.library { s.cloud.library = v.clone(); }
-    if let Some(v) = toml_cfg.tokeer.register_scheme { s.tokeer_register_scheme = v; }
     s
 }
 
@@ -342,7 +336,6 @@ pub fn get_update_enabled() -> bool { STATE.lock().expect("poisoned").snapshot.u
 pub fn get_manifest_timeouts() -> ManifestTimeouts { STATE.lock().expect("poisoned").snapshot.manifest_timeouts }
 pub fn get_donate_settings() -> DonateSettings { STATE.lock().expect("poisoned").snapshot.donate.clone() }
 pub fn get_cloud_settings() -> CloudSettings { STATE.lock().expect("poisoned").snapshot.cloud.clone() }
-pub fn get_tokeer_register_scheme() -> bool { STATE.lock().expect("poisoned").snapshot.tokeer_register_scheme }
 
 #[cfg(test)]
 mod tests {

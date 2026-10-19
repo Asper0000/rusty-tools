@@ -18,6 +18,7 @@
 <p align="center">
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-1.75%2B-orange?logo=rust&logoColor=white" alt="Rust"></a>
   <a href="#"><img src="https://img.shields.io/badge/Platform-Windows%2010%2F11%20x64-0078D6?logo=windows&logoColor=white" alt="Windows"></a>
+  <a href="https://deepwiki.com/Asper0000/rusty-tools"><img src="https://img.shields.io/badge/DeepWiki-RustyTools-blue" alt="DeepWiki"></a>
 </p>
 
 <p align="center">

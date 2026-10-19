@@ -18,7 +18,6 @@ use RustyTools::bridge;
 use RustyTools::platform::hash;
 use RustyTools::utils::config::{config, lua_config};
 use RustyTools::utils::support::fnv1a_hash;
-use RustyTools::utils::tokeer::bridge as tokeer_bridge;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -32,8 +31,7 @@ fn main() -> ExitCode {
         "parse-toml"             => cmd_parse_toml(&args[1..]),
         "sha256"                 => cmd_sha256(&args[1..]),
         "fnv1a"                  => cmd_fnv1a(&args[1..]),
-        "handle-uri"             => cmd_handle_uri(&args[1..]),
-        "register-uri"           => cmd_register_uri(&args[1..]),
+        "persist-keys"           => cmd_persist_keys(&args[1..]),
         "help" | "-h" | "--help" => { print_help(); ExitCode::SUCCESS }
         other => {
             eprintln!("ost-cli: unknown subcommand '{other}'");
@@ -132,6 +130,51 @@ fn cmd_sha256(rest: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+fn cmd_persist_keys(rest: &[String]) -> ExitCode {
+    let mut steam_path: Option<&str> = None;
+    let mut lua_path: Option<&str> = None;
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i].as_str() {
+            "--steam" | "-s" => {
+                i += 1;
+                steam_path = rest.get(i).map(|s| s.as_str());
+            }
+            "--lua" | "-l" => {
+                i += 1;
+                lua_path = rest.get(i).map(|s| s.as_str());
+            }
+            other => {
+                eprintln!("ost-cli persist-keys: unexpected argument '{other}'");
+                return ExitCode::from(2);
+            }
+        }
+        i += 1;
+    }
+
+    let Some(steam) = steam_path else {
+        eprintln!("ost-cli persist-keys: --steam <path> is required");
+        return ExitCode::from(2);
+    };
+    let Some(lua) = lua_path else {
+        eprintln!("ost-cli persist-keys: --lua <path> is required");
+        return ExitCode::from(2);
+    };
+
+    println!("Parsing Lua from: {lua}");
+    lua_config::parse_directory(lua);
+    let depots = lua_config::get_all_depot_ids();
+    println!("Found {} depot(s) in Lua config", depots.len());
+
+    println!("Persisting to: {steam}\\config\\config.vdf");
+    if RustyTools::utils::config::vdf_persist::persist_lua_keys_to_config_vdf(steam) {
+        println!("OK");
+        ExitCode::SUCCESS
+    } else {
+        eprintln!("FAILED");
+        ExitCode::from(1)
+    }
+}
 fn cmd_fnv1a(rest: &[String]) -> ExitCode {
     let Some(s) = rest.first() else {
         eprintln!("ost-cli fnv1a: missing <STRING>");
@@ -139,30 +182,6 @@ fn cmd_fnv1a(rest: &[String]) -> ExitCode {
     };
     let h = fnv1a_hash(s);
     println!("0x{h:08X}  ({h})");
-    ExitCode::SUCCESS
-}
-
-fn cmd_handle_uri(rest: &[String]) -> ExitCode {
-    let Some(url) = rest.first() else {
-        eprintln!("ost-cli handle-uri: missing <URL>");
-        return ExitCode::from(2);
-    };
-    // Same entry point as the exported TokeerUri. On Windows, error
-    // paths pop a modal MessageBox — the CLI does not suppress that.
-    // On success the redemption completes normally.
-    tokeer_bridge::handle_uri(url);
-    ExitCode::SUCCESS
-}
-
-fn cmd_register_uri(rest: &[String]) -> ExitCode {
-    let Some(path) = rest.first() else {
-        eprintln!("ost-cli register-uri: missing <PATH-TO-RustyTools.dll>");
-        return ExitCode::from(2);
-    };
-    println!("Registering bst:// URI scheme -> {path}");
-    tokeer_bridge::register_uri_scheme(path);
-    println!("Done. Verify with:");
-    println!("  reg query \"HKCU\\\\Software\\\\Classes\\\\bst\" /s");
     ExitCode::SUCCESS
 }
 
@@ -223,13 +242,13 @@ SUBCOMMANDS:
     parse-toml PATH       Parse a TOML config file and print the settings
                           the loader would apply.
     sha256 PATH           Print the lowercase-hex SHA-256 of a file.
+    persist-keys --steam PATH --lua PATH
+                          Parse a Lua directory and write all depot
+                          decryption keys into <steam>/config/config.vdf
+                          under a synthetic apps/0 node, for external
+                          tools (e.g. blueprint extractors) to consume.
     fnv1a STRING          Print the FNV-1a 32-bit hash of a string (the
                           pattern-loader key format).
-    handle-uri URL        Parse and dispatch a bst:// URL exactly as the
-                          rundll32 TokeerUri entry point would. On
-                          Windows, error paths pop a modal MessageBox.
-    register-uri PATH     Install the bst:// URI scheme under HKCU,
-                          pointing at the given RustyTools.dll path.
     help, -h, --help      Print this help.
 "
     );

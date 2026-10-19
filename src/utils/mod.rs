@@ -5,5 +5,4 @@ pub mod support;
 pub mod config;
 pub mod steam_metadata;
 pub mod tickets;
-pub mod tokeer;
 pub mod cloud_redirect;
