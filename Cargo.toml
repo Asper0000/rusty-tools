@@ -4,7 +4,7 @@ default-members = [".", "proxies/dwmapi_proxy", "proxies/xinput1_4_proxy", "tool
 
 [package]
 name = "rusty_tools"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2021"
 rust-version = "1.75"
 description = "Rust port of OpenSteamTool / BetterSteamTools"
