@@ -12,7 +12,7 @@ use parking_lot::Mutex;
 use crate::dllmain::K_ONLINE_FIX_APPID;
 use crate::hook::veh_common::Int3Site;
 use crate::platform::trap::Context;
-use crate::steam::structs::{CAppData, CGameID, CUtlBuffer};
+use crate::steam::structs::{CGameID, CUtlBuffer};
 use crate::steam::types::AppId_t;
 use crate::{
     arm_capture_c, arm_int3_c, capture_ready, capture_this_fn, hook_fn,
@@ -262,34 +262,46 @@ pub fn get_game_name_by_app_id(app_id: AppId_t) -> String {
         return cached;
     }
 
+    // Only cache successful lookups. If the capture has not fired yet,
+    // return empty without caching so the next call retries. This
+    // prevents a transient early call from permanently poisoning the
+    // cache with an empty name.
+    if !capture_ready!(GetAppDataFromAppInfo) {
+        LOG_MISC_DEBUG!(
+            "GetGameNameByAppID({}) called before GetAppDataFromAppInfo capture",
+            app_id,
+        );
+        return String::new();
+    }
+
     let mut name = String::new();
-    if capture_ready!(GetAppDataFromAppInfo) {
-        let mut buf = [0u8; 256];
-        // "common/name" triggers auto-localization in the C++ helper:
-        // prefix "common" (keyType=2) + key "name", then the helper tries
-        // "name_localized/<current_lang>" before falling back to "name".
-        // Returns strlen+1 on success, -1 on failure.
-        let key = b"common/name\0";
-        let p_this = unsafe { CAPTURED_GET_APP_DATA_FROM_APP_INFO.load() };
-        let len = unsafe {
-            o_GetAppDataFromAppInfo(
-                p_this,
-                app_id,
-                key.as_ptr() as *const i8,
-                buf.as_mut_ptr(),
-                buf.len() as i32,
-            )
-        };
-        if len > 1 {
-            let n = (len - 1) as usize;
-            if n <= buf.len() {
-                name = String::from_utf8_lossy(&buf[..n]).into_owned();
-            }
+    let mut buf = [0u8; 256];
+    // "common/name" triggers auto-localization in the C++ helper:
+    // prefix "common" (keyType=2) + key "name", then the helper tries
+    // "name_localized/<current_lang>" before falling back to "name".
+    // Returns strlen+1 on success, -1 on failure.
+    let key = b"common/name\0";
+    let p_this = unsafe { CAPTURED_GET_APP_DATA_FROM_APP_INFO.load() };
+    let len = unsafe {
+        o_GetAppDataFromAppInfo(
+            p_this,
+            app_id,
+            key.as_ptr() as *const i8,
+            buf.as_mut_ptr(),
+            buf.len() as i32,
+        )
+    };
+    if len > 1 {
+        let n = (len - 1) as usize;
+        if n <= buf.len() {
+            name = String::from_utf8_lossy(&buf[..n]).into_owned();
         }
     }
 
     LOG_MISC_DEBUG!("GetGameNameByAppID({}): {}", app_id, name);
-    GAME_NAME_CACHE.lock().insert(app_id, name.clone());
+    if !name.is_empty() {
+        GAME_NAME_CACHE.lock().insert(app_id, name.clone());
+    }
     name
 }
 

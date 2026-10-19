@@ -11,7 +11,6 @@
 //! only the length guard survives the port. All other inputs succeed.
 
 use crate::ostp_debug;
-use crate::platform::logging::Level;
 
 /// A UTF-16 wide string. On Windows `wchar_t` is 16 bits, one `u16`
 /// per code unit.

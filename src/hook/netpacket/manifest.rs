@@ -28,7 +28,7 @@ use crate::utils::steam_metadata::{manifest_cache, manifest_client, manifest_don
 use super::dispatch::RecvReplacement;
 use super::state::{K_MAX_BODY_SIZE, K_MAX_HDR_SIZE};
 
-const K_MAX_WAIT_SECONDS: u64 = 12;
+const K_MAX_WAIT_SECONDS: u64 = 2;
 const K_MAX_SENT_TRACKED: usize = 4096;
 const K_ERESULT_OK: i32 = 1;
 
@@ -191,11 +191,25 @@ pub fn handle_recv(body: &[u8], hdr: &[u8]) -> RecvReplacement {
     };
     let Some(rx) = rx else { return RecvReplacement::None; };
 
-    let code = match rx.recv_timeout(Duration::from_secs(K_MAX_WAIT_SECONDS)) {
+    // Fast path: if the fetch thread already finished, use it without
+    // blocking the network thread. Only wait if it is still in flight,
+    // and cap the wait so a hung provider does not stall downloads.
+    let code = match rx.try_recv() {
         Ok(c) => c,
-        Err(_) => {
+        Err(std::sync::mpsc::TryRecvError::Empty) => {
+            match rx.recv_timeout(Duration::from_secs(K_MAX_WAIT_SECONDS)) {
+                Ok(c) => c,
+                Err(_) => {
+                    LOG_MANIFEST_WARN!(
+                        "GetManifestRequestCode recv: HTTP timed out for jobid={}", job_id,
+                    );
+                    return RecvReplacement::None;
+                }
+            }
+        }
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
             LOG_MANIFEST_WARN!(
-                "GetManifestRequestCode recv: HTTP timed out for jobid={}", job_id,
+                "GetManifestRequestCode recv: fetch thread died for jobid={}", job_id,
             );
             return RecvReplacement::None;
         }

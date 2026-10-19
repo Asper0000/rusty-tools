@@ -15,7 +15,6 @@
 #![allow(non_upper_case_globals)]
 
 use bitflags::bitflags;
-use super::types::*;
 
 #[repr(i32)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]

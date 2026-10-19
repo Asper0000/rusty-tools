@@ -3,13 +3,12 @@
 
 use prost::Message;
 
-use crate::steam::net_packet as netpkt;
 use crate::steam::proto::CMsgProtoBufHeader;
 use crate::utils::cloud_redirect::host as cloud_redirect;
 use crate::utils::support::fnv::fnv1a_hash;
 
 use super::{
-    access_token, family_sharing, legacy_key, licenses, manifest,
+    access_token, family_sharing, licenses, manifest,
     manifest_probe, msg_name, onlinefix,
     packet::{self, K_MSG_HDR_PROTO_FLAG},
     richpresence, userstats,

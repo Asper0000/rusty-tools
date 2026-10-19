@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
-use crate::platform::dynamic_library::{self, ModuleHandle};
+use crate::platform::dynamic_library::ModuleHandle;
 use crate::platform::memory;
 use crate::platform::numbers;
 use crate::utils::support::fnv::fnv1a_hash;

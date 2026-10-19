@@ -240,17 +240,19 @@ fn init_thread(self_module: ModuleHandle) -> u32 {
 /// directly to service a `bst://` link — there we must NOT run the
 /// Steam-injection machinery.
 fn is_steam_host() -> bool {
-    use std::ffi::CStr;
-    let mut buf = [0i8; 260];
+    let mut buf = [0u8; 260];
     let n = unsafe {
         windows_sys::Win32::System::LibraryLoader::GetModuleFileNameA(
             std::ptr::null_mut(),
-            buf.as_mut_ptr() as *mut u8,
+            buf.as_mut_ptr(),
             buf.len() as u32,
         )
     };
     if n == 0 { return false; }
-    let s = unsafe { CStr::from_ptr(buf.as_ptr()) }.to_string_lossy();
+    // GetModuleFileNameA does not null-terminate when the path exactly
+    // fills the buffer, so slice to the returned length instead of
+    // relying on CStr::from_ptr (which would read past the end).
+    let s = String::from_utf8_lossy(&buf[..n as usize]);
     let name = match s.rfind('\\') {
         Some(i) => &s[i + 1..],
         None => &s[..],
