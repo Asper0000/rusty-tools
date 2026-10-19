@@ -60,18 +60,6 @@ enabled = false
 enabled = false
 # library = "cloud_redirect.dll"
 
-[tokeer]
-# Install the bst:// URI scheme under HKCU\Software\Classes\bst.
-#
-# Recommended: leave this at false and run ONCE from a terminal:
-#   ost-cli register-uri "<path-to-RustyTools.dll>"
-#
-# Enabling this makes the DLL ensure the scheme is registered on every
-# startup. The registry write takes the per-user hive lock, which is
-# shared with Steam's own startup writes and can stall Steam long
-# enough for its watchdog to terminate the process.
-register_scheme = false
-
 [remote]
 # Optional metadata mirror(s). Leave unset for the built-in chain.
 # url_template = "https://your.server/{channel}/{component}/{sha256}.toml"

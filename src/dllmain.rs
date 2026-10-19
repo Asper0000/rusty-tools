@@ -18,7 +18,6 @@ use crate::utils::cloud_redirect::host as cloud_redirect;
 use crate::utils::config::{config, config_file_watcher, lua_config, lua_file_watcher};
 use crate::utils::logging;
 use crate::utils::steam_metadata::{ipc_loader, manifest_donor, pattern_loader, steam_diagnostics};
-use crate::utils::tokeer::bridge as tokeer_bridge;
 
 // ── Module globals ──────────────────────────────────────────────────
 
@@ -193,6 +192,10 @@ fn init_thread(self_module: ModuleHandle) -> u32 {
     }
     LOG_INFO!("[wf] lua parse: done");
 
+    LOG_INFO!("[wf] persist_lua_keys: enter");
+    crate::utils::config::vdf_persist::persist_lua_keys_to_config_vdf(&paths.install);
+    LOG_INFO!("[wf] persist_lua_keys: done");
+
     LOG_INFO!("[wf] lua_file_watcher::start: enter");
     lua_file_watcher::start(watch_dirs);
     LOG_INFO!("[wf] lua_file_watcher::start: done");
@@ -220,37 +223,6 @@ fn init_thread(self_module: ModuleHandle) -> u32 {
     LOG_INFO!("[wf] manifest_donor::start: enter");
     manifest_donor::start();
     LOG_INFO!("[wf] manifest_donor::start: done");
-
-    // The bst:// URI scheme registration writes to
-    // HKCU\Software\Classes\bst, which requires the per-user registry
-    // hive lock. That same lock is needed by Steam's own startup
-    // writes to HKCU\Software\Valve\Steam, so holding it can stall
-    // Steam's main thread long enough for its startup watchdog to fire.
-    // Do not do the write on every startup:
-    //
-    //   * default: skip entirely. The scheme is a one-time setup step;
-    //     install it once with `ost-cli register-uri <path>`.
-    //   * opt-in:  set `[tokeer] register_scheme = true`. The write is
-    //     skipped when the key already has the expected value.
-    if crate::utils::config::config::get_tokeer_register_scheme() {
-        LOG_INFO!("[wf] register_uri_scheme: opt-in enabled, spawning on detached thread");
-        let dll_path = format!("{}\\RustyTools.dll", paths.install);
-        let spawn_ok = std::thread::Builder::new()
-            .name("ost-uri-register".into())
-            .spawn(move || {
-                LOG_INFO!("[wf] register_uri_scheme: enter (thread)");
-                tokeer_bridge::register_uri_scheme(&dll_path);
-                LOG_INFO!("[wf] register_uri_scheme: done (thread)");
-            })
-            .is_ok();
-        LOG_INFO!("[wf] register_uri_scheme: spawn ok={}", spawn_ok);
-    } else {
-        LOG_INFO!(
-            "URI scheme registration skipped (default). \
-             Set [tokeer] register_scheme = true in rustytools.toml, or run \
-             `ost-cli register-uri <path-to-RustyTools.dll>` once."
-        );
-    }
 
     LOG_INFO!("rusty_tools init complete");
     LOG_INFO!("[wf] init_thread: exit");

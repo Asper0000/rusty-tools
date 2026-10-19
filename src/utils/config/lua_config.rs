@@ -318,25 +318,6 @@ fn register_all(lua: &Lua, store: &Arc<Mutex<Store>>) {
     }).unwrap();
     lua.globals().set("setmanifestid", f).ok();
 
-    let f = lua.create_function(move |_, (app_id, hex): (i64, String)| {
-        let app_id = validate_id(app_id, "setAppTicket")?;
-        let data = decode_hex(&hex);
-        if !bridge::appticket_write_ownership_ticket(app_id, &data) {
-            return Err(mlua::Error::RuntimeError("setAppTicket: failed to write credential store".into()));
-        }
-        Ok(())
-    }).unwrap();
-    lua.globals().set("setappticket", f).ok();
-
-    let f = lua.create_function(move |_, (app_id, hex): (i64, String)| {
-        let app_id = validate_id(app_id, "setETicket")?;
-        let data = decode_hex(&hex);
-        if !bridge::appticket_write_encrypted_ticket(app_id, &data) {
-            return Err(mlua::Error::RuntimeError("setETicket: failed to write credential store".into()));
-        }
-        Ok(())
-    }).unwrap();
-    lua.globals().set("seteticket", f).ok();
 
     let s = store.clone();
     let f = lua.create_function(move |_, (app_id, steam_id): (i64, String)| {
