@@ -167,8 +167,13 @@ fn cmd_persist_keys(rest: &[String]) -> ExitCode {
     println!("Found {} depot(s) in Lua config", depots.len());
 
     println!("Persisting to: {steam}\\config\\config.vdf");
-    if RustyTools::utils::config::vdf_persist::persist_lua_keys_to_config_vdf(steam) {
-        println!("OK");
+    let ok = RustyTools::utils::config::vdf_persist::persist_lua_keys_to_config_vdf(steam);
+    if ok {
+        let path = std::path::Path::new(steam).join("config").join("config.vdf");
+        let count = std::fs::read_to_string(&path)
+            .map(|t| t.matches("\"DecryptionKey\"").count())
+            .unwrap_or(0);
+        println!("OK ({} DecryptionKey entries in config.vdf)", count);
         ExitCode::SUCCESS
     } else {
         eprintln!("FAILED");

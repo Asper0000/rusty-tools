@@ -196,6 +196,10 @@ fn init_thread(self_module: ModuleHandle) -> u32 {
     crate::utils::config::vdf_persist::persist_lua_keys_to_config_vdf(&paths.install);
     LOG_INFO!("[wf] persist_lua_keys: done");
 
+    LOG_INFO!("[wf] start_vdf_keeper: enter");
+    crate::utils::config::vdf_persist::start_keeper(&paths.install);
+    LOG_INFO!("[wf] start_vdf_keeper: done");
+
     LOG_INFO!("[wf] lua_file_watcher::start: enter");
     lua_file_watcher::start(watch_dirs);
     LOG_INFO!("[wf] lua_file_watcher::start: done");
@@ -301,6 +305,13 @@ pub unsafe extern "system" fn DllMain(
                 let _ = std::panic::catch_unwind(|| {
                     config_file_watcher::stop();
                     lua_file_watcher::stop();
+                    crate::utils::config::vdf_persist::stop_keeper();
+                    // Best-effort final write to config.vdf before hooks come down.
+                    let _ = std::panic::catch_unwind(|| {
+                        if let Some(p) = paths() {
+                            crate::utils::config::vdf_persist::persist_lua_keys_to_config_vdf(&p.install);
+                        }
+                    });
                     crate::hook::framework::uninstall_steamui_hooks();
                     crate::hook::framework::uninstall_steamclient_hooks();
                     cloud_redirect::shutdown();
