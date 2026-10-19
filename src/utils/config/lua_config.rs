@@ -66,34 +66,6 @@ fn rebuild_manifest_override(store: &mut Store, depot_id: u64) {
     }
 }
 
-fn decode_hex(hex: &str) -> Vec<u8> {
-    // Called once per config load from setappticket / seteticket, so the
-    // old String-per-pair allocation was harmless in practice. This
-    // version allocates only the output Vec and preserves the previous
-    // behaviour exactly, including for malformed input (any non-hex
-    // nibble in a pair yields 0).
-    fn nibble(c: u8) -> Option<u8> {
-        match c {
-            b'0'..=b'9' => Some(c - b'0'),
-            b'a'..=b'f' => Some(c - b'a' + 10),
-            b'A'..=b'F' => Some(c - b'A' + 10),
-            _ => None,
-        }
-    }
-    let bytes = hex.as_bytes();
-    let mut out = Vec::with_capacity((bytes.len() + 1) / 2);
-    let mut i = 0;
-    while i < bytes.len() {
-        let hi = nibble(bytes[i]);
-        let lo = if i + 1 < bytes.len() { nibble(bytes[i + 1]) } else { Some(0) };
-        match (hi, lo) {
-            (Some(h), Some(l)) => out.push((h << 4) | l),
-            _ => out.push(0),
-        }
-        i += 2;
-    }
-    out
-}
 
 /// Serialise a Lua `{ key = value, ... }` table into the
 /// `"Key: Value\r\n"` form that WinHTTP request headers take.

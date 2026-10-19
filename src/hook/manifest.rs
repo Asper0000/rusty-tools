@@ -25,7 +25,7 @@ use crate::{hook_fn, install_hook_c, uninstall_hook};
 
 /// Per-fetch timeout for the on-demand pre-seed in
 /// `YldLoadDepotManifest`.
-const K_PRESEED_FETCH_TIMEOUT_MS: u32 = 5000;
+const K_PRESEED_FETCH_TIMEOUT_MS: u32 = 2000;
 
 /// Quiet window before a missing-manifest popup is surfaced.
 const K_MISS_NOTIFY_DEBOUNCE_MS: u64 = 3000;

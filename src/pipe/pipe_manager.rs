@@ -9,7 +9,7 @@ use parking_lot::Mutex;
 
 use crate::hook::misc as hooks_misc;
 use crate::pipe::injection;
-use crate::pipe::pipe_types::{make_pipe_key, PipeContext, PipeKey, ProcessKey};
+use crate::pipe::pipe_types::{make_pipe_key, PipeContext, ProcessKey};
 use crate::pipe::process_inspector::{self, ProcessSnapshot};
 use crate::steam::structs::CPipeClient;
 use crate::steam::types::AppId_t;

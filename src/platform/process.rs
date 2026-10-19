@@ -16,7 +16,6 @@ pub struct ModuleInfo {
 mod imp {
     use super::*;
     use std::ffi::c_void;
-    use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Foundation::{
         CloseHandle, GetLastError, FILETIME, HANDLE, INVALID_HANDLE_VALUE,
     };

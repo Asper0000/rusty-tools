@@ -69,7 +69,6 @@ mod imp {
         CloseHandle, GetLastError, WAIT_OBJECT_0,
     };
     use windows_sys::Win32::System::Diagnostics::Debug::WriteProcessMemory;
-    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::System::Memory::{
         VirtualAllocEx, VirtualFreeEx, MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE,
     };
@@ -135,7 +134,6 @@ mod imp {
     }
 
     fn find_remote_module_base(pid: u32, name: &str) -> Option<u64> {
-        let mods = crate::platform::process::enumerate_modules(pid);
         // We did not keep base address in ModuleInfo. For injection we
         // need it; re-snapshot with Toolhelp directly.
         use windows_sys::Win32::System::Diagnostics::ToolHelp::{
@@ -160,7 +158,6 @@ mod imp {
             }
         }
         unsafe { CloseHandle(snap); }
-        let _ = mods;
         result
     }
 

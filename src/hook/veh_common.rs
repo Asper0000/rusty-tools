@@ -114,28 +114,41 @@ pub fn has_sites() -> bool {
 }
 
 pub fn on_breakpoint(ctx: &mut Context) -> bool {
-    let sites = SITES.read();
-    for site in sites.iter() {
-        if site.target.is_null() {
-            continue;
-        }
-        if !is_at(ctx.instruction_pointer(), site.target as *const _) {
-            continue;
-        }
-        // Restore the real first instruction before resuming.
-        unsafe {
-            crate::platform::memory::write_executable_byte(
-                site.target as *mut std::ffi::c_void,
-                site.original_byte,
-            );
-        }
-        (site.on_hit)(ctx, site);
-        if site.persistent {
-            ctx.enable_single_step();
-        }
-        return true;
+    // Snapshot the matching site so the on_hit callback runs without
+    // holding SITES.read(). A callback that arms or disarms a site
+    // (which takes SITES.write()) would otherwise deadlock.
+    let matched = {
+        let sites = SITES.read();
+        sites.iter().find_map(|s| {
+            if s.target.is_null() { return None; }
+            if !is_at(ctx.instruction_pointer(), s.target as *const _) {
+                return None;
+            }
+            Some(Int3Site {
+                target: s.target,
+                original_byte: s.original_byte,
+                persistent: s.persistent,
+                on_hit: s.on_hit,
+                callback_data: s.callback_data,
+                label: s.label,
+            })
+        })
+    };
+
+    let Some(site) = matched else { return false; };
+
+    // Restore the real first instruction before resuming.
+    unsafe {
+        crate::platform::memory::write_executable_byte(
+            site.target as *mut std::ffi::c_void,
+            site.original_byte,
+        );
     }
-    false
+    (site.on_hit)(ctx, &site);
+    if site.persistent {
+        ctx.enable_single_step();
+    }
+    true
 }
 
 pub fn on_single_step(ctx: &mut Context) -> bool {

@@ -5,7 +5,7 @@
 //! not the `i32` that the Win32 header names `LSTATUS`. All the
 //! helper types and constants here use `u32` accordingly.
 
-use super::windows::handles::{UniqueRegKey, HKEY};
+use super::windows::handles::UniqueRegKey;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Status {
@@ -34,7 +34,7 @@ mod imp {
     use std::ffi::c_void;
     use windows_sys::Win32::System::Registry::{
         RegCreateKeyExW, RegGetValueW, RegSetValueExW, HKEY_CURRENT_USER, KEY_SET_VALUE,
-        REG_OPTION_NON_VOLATILE, REG_SZ, RRF_RT_REG_BINARY, RRF_RT_REG_DWORD, RRF_RT_REG_SZ,
+        REG_OPTION_NON_VOLATILE, RRF_RT_REG_BINARY, RRF_RT_REG_DWORD, RRF_RT_REG_SZ,
     };
 
     // windows-sys models LSTATUS as `u32`.
@@ -475,9 +475,6 @@ pub fn get_active_user() -> Result<(u32, String), Status> {
     imp::get_active_user()
 }
 
-#[cfg(not(windows))]
-#[allow(dead_code)]
-fn _touch(_: HKEY) {}
 
 #[cfg(test)]
 mod tests {

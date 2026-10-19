@@ -380,16 +380,37 @@ pub fn handle_recv(body: &[u8], hdr: &[u8]) -> Option<Vec<u8>> {
         msg.status_flags.unwrap_or(0), msg.friends.len(),
     );
 
-    // Cache the original bytes (pre-mutation) as the inject template.
-    if hdr.len() <= K_MAX_HDR_SIZE && body.len() <= K_MAX_BODY_SIZE {
-        unsafe {
-            let b = buffers();
-            b.self_hdr[..hdr.len()].copy_from_slice(hdr);
-            b.cb_self_hdr = hdr.len() as u32;
-            b.self_body[..body.len()].copy_from_slice(body);
-            b.cb_self_body = body.len() as u32;
+    // Cache a template for future injects. If the body is too large (very
+    // large friend list), strip it to just our own entry. Steam's
+    // PersonaState updates are partial: only entries present in the
+    // message are updated, so a stripped template still works for inject.
+    if hdr.len() <= K_MAX_HDR_SIZE {
+        let cache_body: Option<Vec<u8>> = if body.len() <= K_MAX_BODY_SIZE {
+            Some(body.to_vec())
+        } else {
+            let mut stripped = CMsgClientPersonaState::default();
+            stripped.status_flags = msg.status_flags;
+            if let Some(me) = msg.friends.get(entry_idx).cloned() {
+                stripped.friends.push(me);
+            }
+            let encoded = stripped.encode_to_vec();
+            if encoded.len() <= K_MAX_BODY_SIZE { Some(encoded) } else { None }
+        };
+        if let Some(cb) = cache_body {
+            unsafe {
+                let b = buffers();
+                b.self_hdr[..hdr.len()].copy_from_slice(hdr);
+                b.cb_self_hdr = hdr.len() as u32;
+                b.self_body[..cb.len()].copy_from_slice(&cb);
+                b.cb_self_body = cb.len() as u32;
+            }
+            G_HAVE_SELF_CACHED.store(true, Ordering::Release);
+        } else {
+            LOG_RICHPRESENCE_WARN!(
+                "Self PersonaState entry too large to cache even after strip ({}+{} bytes)",
+                body.len(), hdr.len(),
+            );
         }
-        G_HAVE_SELF_CACHED.store(true, Ordering::Release);
     }
 
     let app_id = playing_app_id();
@@ -398,7 +419,25 @@ pub fn handle_recv(body: &[u8], hdr: &[u8]) -> Option<Vec<u8>> {
     apply_game_fields(&mut msg, entry_idx, app_id);
     let new_body = msg.encode_to_vec();
     if new_body.len() > K_MAX_BODY_SIZE {
-        LOG_RICHPRESENCE_WARN!("In-place patch too large ({} bytes)", new_body.len());
+        // Body grew past the buffer. Fall back to stripping other friends
+        // so the patched frame still fits. Steam treats the reduced set
+        // as a partial update; unaffected friends keep their cached state.
+        let mut stripped = CMsgClientPersonaState::default();
+        stripped.status_flags = msg.status_flags;
+        if let Some(me) = msg.friends.get(entry_idx).cloned() {
+            stripped.friends.push(me);
+        }
+        let stripped_bytes = stripped.encode_to_vec();
+        if stripped_bytes.len() <= K_MAX_BODY_SIZE {
+            LOG_RICHPRESENCE_DEBUG!(
+                "Patched live self push with appid {} (stripped {} -> {} bytes)",
+                app_id, new_body.len(), stripped_bytes.len(),
+            );
+            return Some(stripped_bytes);
+        }
+        LOG_RICHPRESENCE_WARN!(
+            "In-place patch too large even after strip ({} bytes)", stripped_bytes.len(),
+        );
         return None;
     }
     LOG_RICHPRESENCE_INFO!("Patched live self push with appid {}", app_id);

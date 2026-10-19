@@ -1,32 +1,38 @@
-//! Writes Lua-provided depot decryption keys into `<Steam>/config/config.vdf`
-//! under a synthetic `apps/0/depots/<id>/DecryptionKey` section so that
-//! external tools (like the Python blueprint extractor) can find them.
+//! Persists Lua-provided depot decryption keys into `<Steam>/config/config.vdf`
+//! so external tools (like the Python blueprint extractor) can find them.
 //!
-//! ## Why synthetic `apps/0`
+//! ## Why per-app, not apps/0
 //!
-//! At the moment `init_thread` runs (right after Lua parse), the hook layer
-//! has not yet seen `BuildDepotDependency` for any app, so
-//! `hook::manifest::lookup_depot` returns `None` for every depot. We do not
-//! know which real app a given Lua depot belongs to. `0` is a valid u32 but
-//! not a real Steam app, so Steam's config parser ignores the entry, while
-//! the extractor's `InstallConfigStore -> Software -> Valve -> Steam ->
-//! apps -> * -> depots -> * -> DecryptionKey` walk still picks it up.
+//! Steam re-serializes `config.vdf` from an in-memory model keyed by real
+//! app IDs. Entries under an unknown app (like `apps/0`) are dropped on
+//! every save, which is why the naive approach produces "18 keys added"
+//! on every launch and never sticks.
 //!
-//! ## Skip-if-present
+//! Instead, we scan the installed ACFs (`steamapps/appmanifest_*.acf`) to
+//! build a `depot_id -> app_id` map, and write each key under
+//! `apps/<real_app>/depots/<depot>/DecryptionKey`. That is exactly the
+//! shape Steam uses for owned games, so Steam preserves it on save.
 //!
-//! If the depot already has a `DecryptionKey` somewhere in the tree (for
-//! owned games Steam has already persisted), we leave that one alone. We
-//! only add entries for depots Steam currently has no key for.
+//! Depots with no matching installed ACF fall back to `apps/0`. In
+//! practice that only happens for depots of uninstalled apps, which the
+//! extractor cannot use anyway.
 //!
-//! ## #base safety
+//! ## Keeper thread
 //!
-//! `config.vdf` occasionally contains `#base "includedfile.vdf"` directives
-//! at the top level. This parser does not read the included files, so
-//! rewriting a config.vdf that uses `#base` would silently drop their
-//! contents. We refuse to write in that case and log a warning.
+//! Even with real app IDs, Steam saves `config.vdf` throughout a session
+//! (login timestamps, library bookkeeping). Any save rewrites the whole
+//! file from memory, which can race our write. A keeper thread polls the
+//! file's mtime every 250 ms and re-persists when it changes externally.
+//! `DLL_PROCESS_DETACH` also runs one final persist to catch the shutdown
+//! save.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::JoinHandle;
+use std::time::{Duration, SystemTime};
+
+use parking_lot::Mutex;
 
 use super::lua_config;
 
@@ -51,8 +57,6 @@ impl VdfNode {
 
     pub fn ensure_section(&mut self, key: &str) -> &mut VdfNode {
         if let Some(i) = self.child_index(key) {
-            // Coerce a leaf that should be a section (should not happen
-            // for a well-formed config.vdf).
             self.children[i].1.value = None;
             return &mut self.children[i].1;
         }
@@ -85,7 +89,9 @@ impl<'a> Lexer<'a> {
             let c = self.text[self.pos];
             if c.is_ascii_whitespace() {
                 self.pos += 1;
-            } else if c == b'/' && self.pos + 1 < self.text.len() && self.text[self.pos + 1] == b'/' {
+            } else if c == b'/' && self.pos + 1 < self.text.len()
+                && self.text[self.pos + 1] == b'/'
+            {
                 while self.pos < self.text.len() && self.text[self.pos] != b'\n' {
                     self.pos += 1;
                 }
@@ -101,9 +107,7 @@ impl<'a> Lexer<'a> {
         let c = self.text[self.pos];
         if c == b'{' { self.pos += 1; return Some(Tok::OpenBrace); }
         if c == b'}' { self.pos += 1; return Some(Tok::CloseBrace); }
-        if c == b'"' {
-            return self.read_quoted().map(Tok::Str);
-        }
+        if c == b'"' { return self.read_quoted().map(Tok::Str); }
         self.read_unquoted().map(Tok::Str)
     }
 
@@ -144,20 +148,13 @@ impl<'a> Lexer<'a> {
 fn parse_vdf(text: &str) -> Option<VdfNode> {
     let mut lex = Lexer::new(text);
     let mut stack: Vec<(String, VdfNode)> = vec![(String::new(), VdfNode::new_section())];
-
     while let Some(tok) = lex.next() {
         match tok {
-            Tok::Str(key) => {
-                match lex.next()? {
-                    Tok::OpenBrace => {
-                        stack.push((key, VdfNode::new_section()));
-                    }
-                    Tok::Str(value) => {
-                        stack.last_mut()?.1.set(&key, &value);
-                    }
-                    Tok::CloseBrace => return None,
-                }
-            }
+            Tok::Str(key) => match lex.next()? {
+                Tok::OpenBrace => stack.push((key, VdfNode::new_section())),
+                Tok::Str(value) => { stack.last_mut()?.1.set(&key, &value); }
+                Tok::CloseBrace => return None,
+            },
             Tok::CloseBrace => {
                 if stack.len() <= 1 { return None; }
                 let (k, node) = stack.pop()?;
@@ -166,7 +163,6 @@ fn parse_vdf(text: &str) -> Option<VdfNode> {
             Tok::OpenBrace => return None,
         }
     }
-
     if stack.len() != 1 { return None; }
     Some(stack.into_iter().next()?.1)
 }
@@ -205,7 +201,7 @@ fn escape(s: &str) -> String {
     out
 }
 
-// Ã¢â€â‚¬Ã¢â€â‚¬ Walk helpers Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// Ã¢â€â‚¬Ã¢â€â‚¬ Existing-key walk Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 fn collect_depot_ids(node: &VdfNode, out: &mut HashSet<u32>) {
     if let Some(depots) = node.get("depots") {
@@ -223,112 +219,278 @@ fn collect_depot_ids(node: &VdfNode, out: &mut HashSet<u32>) {
     }
 }
 
+// Ã¢â€â‚¬Ã¢â€â‚¬ Library discovery + ACF scan Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+
+fn find_libraries(steam_root: &str) -> Vec<String> {
+    let mut libs = vec![steam_root.to_string()];
+    let mut seen: HashSet<String> = HashSet::new();
+    seen.insert(steam_root.to_lowercase());
+
+    let lf_path = Path::new(steam_root).join("steamapps").join("libraryfolders.vdf");
+    let text = match std::fs::read_to_string(&lf_path) {
+        Ok(t) => t,
+        Err(_) => return libs,
+    };
+    let root = match parse_vdf(&text) {
+        Some(r) => r,
+        None => return libs,
+    };
+    let lf = match root.get("libraryfolders") {
+        Some(l) => l,
+        None => return libs,
+    };
+    for (k, v) in &lf.children {
+        if k.parse::<u32>().is_err() { continue; }
+        // Modern format: <n> { path "..." }. Legacy: <n> "...".
+        let path = if v.value.is_some() {
+            v.value.clone()
+        } else {
+            v.get("path").and_then(|n| n.value.clone())
+        };
+        let Some(p) = path else { continue };
+        let lower = p.to_lowercase();
+        if seen.contains(&lower) || !Path::new(&p).is_dir() { continue; }
+        seen.insert(lower);
+        libs.push(p);
+    }
+    libs
+}
+
+fn build_depot_to_app_map(steam_root: &str) -> HashMap<u32, u32> {
+    let mut map = HashMap::new();
+    for lib in find_libraries(steam_root) {
+        let steamapps = Path::new(&lib).join("steamapps");
+        let entries = match std::fs::read_dir(&steamapps) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() { continue; }
+            let name = match path.file_name().and_then(|s| s.to_str()) {
+                Some(n) => n,
+                None => continue,
+            };
+            if !name.starts_with("appmanifest_") || !name.ends_with(".acf") { continue; }
+
+            let text = match std::fs::read_to_string(&path) {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            let root = match parse_vdf(&text) {
+                Some(r) => r,
+                None => continue,
+            };
+            let app = match root.get("AppState") {
+                Some(a) => a,
+                None => continue,
+            };
+            let app_id = match app
+                .get("appid")
+                .and_then(|n| n.value.as_ref())
+                .and_then(|s| s.parse::<u32>().ok())
+            {
+                Some(id) => id,
+                None => continue,
+            };
+            let installed = match app.get("InstalledDepots") {
+                Some(d) => d,
+                None => continue,
+            };
+            for (k, _) in &installed.children {
+                if let Ok(depot_id) = k.parse::<u32>() {
+                    map.insert(depot_id, app_id);
+                }
+            }
+        }
+    }
+    map
+}
+
+// Ã¢â€â‚¬Ã¢â€â‚¬ State + failure logging Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+
+static LAST_WRITE_MTIME: Mutex<Option<SystemTime>> = Mutex::new(None);
+static FAILED_SINCE_SUCCESS: AtomicBool = AtomicBool::new(false);
+static KEEPER_SHUTDOWN: AtomicBool = AtomicBool::new(false);
+static KEEPER_HANDLE: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
+
+/// Log a persist failure. The first failure since the last success is
+/// WARN; repeats are silent. Reset by any successful return from
+/// [`persist_lua_keys_to_config_vdf`].
+fn log_failure(msg: &str) {
+    if !FAILED_SINCE_SUCCESS.swap(true, Ordering::Relaxed) {
+        LOG_WARN!("VdfPersist: {}", msg);
+    }
+}
+
 // Ã¢â€â‚¬Ã¢â€â‚¬ Public entry point Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
-/// Read `<steam_root>/config/config.vdf`, inject every Lua-provided
-/// depot key that is not already present, and write the file back
-/// atomically. Returns `true` if the file was updated.
+/// Read `config.vdf`, inject every Lua-provided depot key that is not
+/// already present, and write back atomically. Uses each depot's real
+/// owning app when an installed ACF can be found; falls back to
+/// `apps/0` otherwise.
+///
+/// Always updates [`LAST_WRITE_MTIME`] after the attempt so the keeper
+/// thread does not retry in a tight loop on persistent failure. Retry
+/// happens on the next external write.
 pub fn persist_lua_keys_to_config_vdf(steam_root: &str) -> bool {
     let config_path = Path::new(steam_root).join("config").join("config.vdf");
+    let result = inner_persist(steam_root, &config_path);
 
-    let text = match std::fs::read_to_string(&config_path) {
+    if let Ok(mtime) = std::fs::metadata(&config_path).and_then(|m| m.modified()) {
+        *LAST_WRITE_MTIME.lock() = Some(mtime);
+    }
+    if result {
+        FAILED_SINCE_SUCCESS.store(false, Ordering::Relaxed);
+    }
+    result
+}
+
+fn inner_persist(steam_root: &str, config_path: &Path) -> bool {
+    let text = match std::fs::read_to_string(config_path) {
         Ok(t) => t,
         Err(e) => {
-            LOG_WARN!("VdfPersist: cannot read {}: {}", config_path.display(), e);
+            log_failure(&format!("cannot read {}: {}", config_path.display(), e));
             return false;
         }
     };
-
     let mut root = match parse_vdf(&text) {
         Some(r) => r,
         None => {
-            LOG_WARN!("VdfPersist: failed to parse {}", config_path.display());
+            log_failure(&format!("failed to parse {}", config_path.display()));
             return false;
         }
     };
-
-    // Refuse to rewrite a file that uses #base directives; we would lose
-    // the included content.
     if root.children.iter().any(|(k, _)| k.eq_ignore_ascii_case("#base")) {
-        LOG_WARN!(
-            "VdfPersist: config.vdf contains #base directives; refusing to \
-             rewrite (would lose included content). Let Steam rewrite it once \
-             (change any setting in Steam), then retry."
-        );
+        log_failure("config.vdf contains #base directives, refusing to rewrite");
         return false;
     }
-
-    // Collect every depot Steam already has a key for. Any depot in that
-    // set is skipped, so real owned games are never touched.
-    let mut existing: HashSet<u32> = HashSet::new();
-    collect_depot_ids(&root, &mut existing);
-
-    let mut to_add: Vec<(u32, String)> = Vec::new();
-    for depot_id in lua_config::get_all_depot_ids() {
-        if existing.contains(&depot_id) { continue; }
-        let key = lua_config::get_decryption_key(depot_id);
-        if key.is_empty() { continue; }
-        to_add.push((depot_id, hex::encode(&key)));
-    }
-
-    if to_add.is_empty() {
-        LOG_INFO!(
-            "VdfPersist: no new depot key(s) to add ({} already present in config.vdf)",
-            existing.len()
-        );
-        return true;
-    }
-
-    // Sanity: the structure must look like a real config.vdf. Refuse to
-    // rewrite the file if it is not, rather than creating a half-tree.
-    let structure_ok = root.get("InstallConfigStore")
+    let structure_ok = root
+        .get("InstallConfigStore")
         .and_then(|n| n.get("Software"))
         .and_then(|n| n.get("Valve"))
         .and_then(|n| n.get("Steam"))
         .is_some();
     if !structure_ok {
-        LOG_WARN!(
-            "VdfPersist: unexpected config.vdf structure (missing \
-             InstallConfigStore/Software/Valve/Steam), refusing to write"
-        );
+        log_failure("unexpected config.vdf structure, refusing to write");
         return false;
     }
 
-    // Walk down to apps/0/depots, creating nodes as needed.
-    let mut cur = &mut root;
-    for key in ["InstallConfigStore", "Software", "Valve", "Steam"] {
-        cur = cur.ensure_section(key);
-    }
-    let apps = cur.ensure_section("apps");
-    let synth_app = apps.ensure_section("0");
-    let synth_depots = synth_app.ensure_section("depots");
+    let depot_to_app = build_depot_to_app_map(steam_root);
 
-    for (depot_id, key_hex) in &to_add {
-        let depot_node = synth_depots.ensure_section(&depot_id.to_string());
-        depot_node.set("DecryptionKey", key_hex);
+    let mut existing: HashSet<u32> = HashSet::new();
+    collect_depot_ids(&root, &mut existing);
+
+    // Group to_add by real app id. Depots with no ACF match go under 0.
+    let mut by_app: HashMap<u32, Vec<(u32, String)>> = HashMap::new();
+    for depot_id in lua_config::get_all_depot_ids() {
+        if existing.contains(&depot_id) { continue; }
+        let key = lua_config::get_decryption_key(depot_id);
+        if key.is_empty() { continue; }
+        let app_id = depot_to_app.get(&depot_id).copied().unwrap_or(0);
+        by_app.entry(app_id).or_default().push((depot_id, hex::encode(&key)));
+    }
+
+    let total_new: usize = by_app.values().map(|v| v.len()).sum();
+    if total_new == 0 {
+        LOG_DEBUG!("VdfPersist: no new depot key(s) ({} already present)", existing.len());
+        return true;
+    }
+
+    let apps = root
+        .ensure_section("InstallConfigStore")
+        .ensure_section("Software")
+        .ensure_section("Valve")
+        .ensure_section("Steam")
+        .ensure_section("apps");
+
+    for (app_id, depots) in &by_app {
+        let app_node = apps.ensure_section(&app_id.to_string());
+        let depot_section = app_node.ensure_section("depots");
+        for (depot_id, key_hex) in depots {
+            depot_section
+                .ensure_section(&depot_id.to_string())
+                .set("DecryptionKey", key_hex);
+        }
     }
 
     let output = serialize_vdf(&root);
-
-    // Atomic write.
     let tmp = config_path.with_extension("vdf.rustytools.tmp");
     if let Err(e) = std::fs::write(&tmp, &output) {
-        LOG_WARN!("VdfPersist: write temp failed: {}", e);
+        log_failure(&format!("write temp failed: {}", e));
         return false;
     }
-    if let Err(e) = std::fs::rename(&tmp, &config_path) {
-        LOG_WARN!("VdfPersist: rename failed: {}", e);
+    if let Err(e) = std::fs::rename(&tmp, config_path) {
+        log_failure(&format!("rename failed: {}", e));
         let _ = std::fs::remove_file(&tmp);
         return false;
     }
 
+    let real_apps = by_app.keys().filter(|&&a| a != 0).count();
+    let unmatched = by_app.get(&0).map(|v| v.len()).unwrap_or(0);
     LOG_INFO!(
-        "VdfPersist: added {} depot key(s) to config.vdf ({} already present)",
-        to_add.len(),
-        existing.len()
+        "VdfPersist: wrote {} key(s) across {} real app(s){} ({} already present)",
+        total_new,
+        real_apps,
+        if unmatched > 0 { format!(" + {} under apps/0", unmatched) } else { String::new() },
+        existing.len(),
     );
     true
 }
+
+// Ã¢â€â‚¬Ã¢â€â‚¬ Keeper Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+
+pub fn start_keeper(steam_root: &str) {
+    if KEEPER_HANDLE.lock().is_some() {
+        LOG_DEBUG!("VdfKeeper: already running");
+        return;
+    }
+    KEEPER_SHUTDOWN.store(false, Ordering::SeqCst);
+    let root = steam_root.to_string();
+    match std::thread::Builder::new()
+        .name("ost-vdf-keeper".into())
+        .spawn(move || keeper_loop(&root))
+    {
+        Ok(h) => { *KEEPER_HANDLE.lock() = Some(h); }
+        Err(e) => LOG_WARN!("VdfKeeper: failed to spawn thread: {}", e),
+    }
+}
+
+pub fn stop_keeper() {
+    KEEPER_SHUTDOWN.store(true, Ordering::SeqCst);
+    if let Some(h) = KEEPER_HANDLE.lock().take() {
+        let _ = h.join();
+    }
+}
+
+fn keeper_loop(steam_root: &str) {
+    let config_path = Path::new(steam_root).join("config").join("config.vdf");
+    LOG_INFO!("VdfKeeper: watching {}", config_path.display());
+    loop {
+        // Sleep 250 ms total, in 10 ms chunks, so shutdown is detected
+        // within 10 ms of being signaled.
+        for _ in 0..25 {
+            if KEEPER_SHUTDOWN.load(Ordering::SeqCst) {
+                LOG_INFO!("VdfKeeper: stopped");
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        let current = match std::fs::metadata(&config_path).and_then(|m| m.modified()) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let recorded = *LAST_WRITE_MTIME.lock();
+        if recorded.map(|t| t == current).unwrap_or(false) {
+            continue; // no external write since our last attempt
+        }
+        LOG_DEBUG!("VdfKeeper: config.vdf changed externally, re-persisting");
+        persist_lua_keys_to_config_vdf(steam_root);
+    }
+}
+
+// Ã¢â€â‚¬Ã¢â€â‚¬ Tests Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 #[cfg(test)]
 mod tests {
@@ -347,13 +509,7 @@ mod tests {
             {
                 "apps"
                 {
-                    "730"
-                    {
-                        "depots"
-                        {
-                            "731" { "DecryptionKey" "abcd" }
-                        }
-                    }
+                    "730" { "depots" { "731" { "DecryptionKey" "abcd" } } }
                 }
             }
         }
@@ -365,15 +521,15 @@ mod tests {
         collect_depot_ids(&root, &mut out);
         assert!(out.contains(&731));
 
-        let serialized = serialize_vdf(&root);
-        let root2 = parse_vdf(&serialized).expect("reparse");
+        let s = serialize_vdf(&root);
+        let root2 = parse_vdf(&s).expect("reparse");
         let mut out2 = HashSet::new();
         collect_depot_ids(&root2, &mut out2);
         assert!(out2.contains(&731));
     }
 
     #[test]
-    fn inject_new_depot() {
+    fn inject_new_depot_under_real_app() {
         let mut root = parse_vdf(r#"
 "InstallConfigStore" { "Software" { "Valve" { "Steam" { "apps" { } } } } }
 "#).unwrap();
@@ -383,13 +539,16 @@ mod tests {
             .ensure_section("Valve")
             .ensure_section("Steam")
             .ensure_section("apps");
-        let zero = apps.ensure_section("0");
-        let depots = zero.ensure_section("depots");
-        depots.ensure_section("12345").set("DecryptionKey", "deadbeef");
+        // Simulate writing 209651 under app 209650.
+        apps.ensure_section("209650")
+            .ensure_section("depots")
+            .ensure_section("209651")
+            .set("DecryptionKey", "deadbeef");
         let s = serialize_vdf(&root);
+        let reparsed = parse_vdf(&s).unwrap();
         let mut out = HashSet::new();
-        collect_depot_ids(&parse_vdf(&s).unwrap(), &mut out);
-        assert!(out.contains(&12345));
+        collect_depot_ids(&reparsed, &mut out);
+        assert!(out.contains(&209651));
     }
 
     #[test]
@@ -403,8 +562,6 @@ mod tests {
         collect_depot_ids(&root, &mut existing);
         assert!(existing.contains(&731));
 
-        // Simulate the skip path: only write if the depot is not already
-        // present. Result must not contain a duplicate "wrong" key.
         let apps = root
             .ensure_section("InstallConfigStore")
             .ensure_section("Software")
@@ -413,9 +570,10 @@ mod tests {
             .ensure_section("apps");
         for id in [731u32] {
             if !existing.contains(&id) {
-                let zero = apps.ensure_section("0");
-                let depots = zero.ensure_section("depots");
-                depots.ensure_section(&id.to_string()).set("DecryptionKey", "wrong");
+                apps.ensure_section("0")
+                    .ensure_section("depots")
+                    .ensure_section(&id.to_string())
+                    .set("DecryptionKey", "wrong");
             }
         }
         let s = serialize_vdf(&root);

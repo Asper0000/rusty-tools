@@ -10,6 +10,8 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
+use std::sync::OnceLock;
+use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::time::{Duration, Instant};
 
 use crate::bridge;
@@ -215,14 +217,55 @@ fn worker_main() {
     LOG_MANIFEST_INFO!("Donor: stopped");
 }
 
+struct CapturedCode {
+    depot_id: u32,
+    gid: u64,
+    code: u64,
+}
+
+static CAPTURE_TX: OnceLock<SyncSender<CapturedCode>> = OnceLock::new();
+
+fn capture_worker(rx: Receiver<CapturedCode>) {
+    loop {
+        let Ok(first) = rx.recv() else { return };
+        let mut batch = vec![first];
+        // Drain whatever else is queued without blocking.
+        while batch.len() < 50 {
+            match rx.try_recv() {
+                Ok(c) => batch.push(c),
+                Err(_) => break,
+            }
+        }
+        let mut body = String::new();
+        for c in &batch {
+            body.push_str(&format!("{}:{}:{}\n", c.depot_id, c.gid, c.code));
+        }
+        submit(&body, batch.len());
+        // Brief pacing between batches so a burst of captures during a
+        // large download does not hammer the donor endpoint.
+        std::thread::sleep(Duration::from_millis(500));
+    }
+}
+
+/// Called from `manifest::handle_recv` on the network thread. Non-blocking:
+/// codes go into a bounded queue drained by a single background worker.
+/// If the queue is full, the code is dropped (donor can pick it up on a
+/// future download).
 pub fn submit_captured_code(depot_id: u32, gid: u64, code: u64) {
     if depot_id == 0 || gid == 0 || code == 0 { return; }
     if !config::get_donate_settings().enabled { return; }
 
-    std::thread::spawn(move || {
-        let body = format!("{}:{}:{}\n", depot_id, gid, code);
-        submit(&body, 1);
+    let tx = CAPTURE_TX.get_or_init(|| {
+        let (tx, rx) = mpsc::sync_channel::<CapturedCode>(256);
+        if let Err(e) = std::thread::Builder::new()
+            .name("ost-donor-capture".into())
+            .spawn(move || capture_worker(rx))
+        {
+            LOG_MANIFEST_WARN!("Donor: capture worker spawn failed: {}", e);
+        }
+        tx
     });
+    let _ = tx.try_send(CapturedCode { depot_id, gid, code });
 }
 
 pub fn start() {

@@ -196,6 +196,10 @@ fn init_thread(self_module: ModuleHandle) -> u32 {
     crate::utils::config::vdf_persist::persist_lua_keys_to_config_vdf(&paths.install);
     LOG_INFO!("[wf] persist_lua_keys: done");
 
+    LOG_INFO!("[wf] start_vdf_keeper: enter");
+    crate::utils::config::vdf_persist::start_keeper(&paths.install);
+    LOG_INFO!("[wf] start_vdf_keeper: done");
+
     LOG_INFO!("[wf] lua_file_watcher::start: enter");
     lua_file_watcher::start(watch_dirs);
     LOG_INFO!("[wf] lua_file_watcher::start: done");
@@ -236,17 +240,19 @@ fn init_thread(self_module: ModuleHandle) -> u32 {
 /// directly to service a `bst://` link — there we must NOT run the
 /// Steam-injection machinery.
 fn is_steam_host() -> bool {
-    use std::ffi::CStr;
-    let mut buf = [0i8; 260];
+    let mut buf = [0u8; 260];
     let n = unsafe {
         windows_sys::Win32::System::LibraryLoader::GetModuleFileNameA(
             std::ptr::null_mut(),
-            buf.as_mut_ptr() as *mut u8,
+            buf.as_mut_ptr(),
             buf.len() as u32,
         )
     };
     if n == 0 { return false; }
-    let s = unsafe { CStr::from_ptr(buf.as_ptr()) }.to_string_lossy();
+    // GetModuleFileNameA does not null-terminate when the path exactly
+    // fills the buffer, so slice to the returned length instead of
+    // relying on CStr::from_ptr (which would read past the end).
+    let s = String::from_utf8_lossy(&buf[..n as usize]);
     let name = match s.rfind('\\') {
         Some(i) => &s[i + 1..],
         None => &s[..],
@@ -301,6 +307,13 @@ pub unsafe extern "system" fn DllMain(
                 let _ = std::panic::catch_unwind(|| {
                     config_file_watcher::stop();
                     lua_file_watcher::stop();
+                    crate::utils::config::vdf_persist::stop_keeper();
+                    // Best-effort final write to config.vdf before hooks come down.
+                    let _ = std::panic::catch_unwind(|| {
+                        if let Some(p) = paths() {
+                            crate::utils::config::vdf_persist::persist_lua_keys_to_config_vdf(&p.install);
+                        }
+                    });
                     crate::hook::framework::uninstall_steamui_hooks();
                     crate::hook::framework::uninstall_steamclient_hooks();
                     cloud_redirect::shutdown();

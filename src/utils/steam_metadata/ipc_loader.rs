@@ -1,6 +1,6 @@
 //! IPC method metadata loader. Source: `IPCLoader.cpp`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Mutex;
 
 use crate::platform::numbers;

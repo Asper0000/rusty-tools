@@ -67,7 +67,6 @@ It's a fork of the C++ project **[BetterSteamTools](https://github.com/madoiscoo
 - **Achievements and stats**: works with the achievement system
 - **Automatic depot decryption**: no manual key entry needed
 - **Manifest pre-caching**: games start downloading instantly
-- **`bst://` link handler**: one-click redemption from browsers
 - **Hot-reload config**: add or remove games without restarting Steam
 - **Lua script support**: flexible per-game tweaks and overrides
 - 🛡️ **Safe to remove**: no permanent changes to your Steam install
@@ -186,8 +185,6 @@ ost-cli parse-lua PATH               Parse a Lua script and print the depot set
 ost-cli parse-toml PATH              Print the effective TOML settings
 ost-cli sha256 PATH                  SHA-256 of a file (for pattern cache keys)
 ost-cli fnv1a STRING                 FNV-1a hash (used internally for signatures)
-ost-cli handle-uri URL               Simulate a bst:// link without a browser
-ost-cli register-uri PATH            Register the bst:// URL scheme once
 ```
 
 ---

@@ -3,7 +3,7 @@
 
 use std::cell::UnsafeCell;
 
-pub const K_MAX_BODY_SIZE: usize = 65536;
+pub const K_MAX_BODY_SIZE: usize = 131072;
 pub const K_MAX_HDR_SIZE:  usize = 1024;
 pub const K_MAX_PACKET_SIZE: usize = 8 + K_MAX_HDR_SIZE + K_MAX_BODY_SIZE;
 pub const K_PACKET_POOL_SIZE: usize = 8;
